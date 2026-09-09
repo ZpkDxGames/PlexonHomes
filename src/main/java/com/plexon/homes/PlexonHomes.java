@@ -55,7 +55,7 @@ public final class PlexonHomes extends JavaPlugin {
 
             repository.ready().whenComplete((ignored, error) -> runPrimary(() -> {
                 if (error == null) {
-                    core.ready("PlexonHomes 1.0.0 ready with Core player-watch runtime");
+                    core.ready("PlexonHomes " + getPluginMeta().getVersion() + " ready with Core player-watch runtime");
                     getLogger().info("PlexonHomes ready; Core " + core.corePluginVersion() + " API " + core.coreApiVersion());
                 } else {
                     core.failed("SQLite initialization failed");
