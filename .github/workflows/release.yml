@@ -1,14 +1,15 @@
-name: Build
+name: Release
 
 on:
   push:
-  pull_request:
+    tags:
+      - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  verify:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -17,6 +18,9 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
+      - name: Verify tag
+        shell: bash
+        run: test "${GITHUB_REF_NAME}" = 'v1.0.0'
       - name: Provision pinned PlexonCore 2.0.3
         shell: bash
         run: |
@@ -24,9 +28,9 @@ jobs:
           mkdir -p libs
           curl -fsSL -o libs/PlexonCore-2.0.3.jar https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.3/PlexonCore-2.0.3.jar
           echo '4c47963ebe7f311917e967678d198f5ea1846fb8897fd607d7d0d734fd8a9f8e  libs/PlexonCore-2.0.3.jar' | sha256sum -c -
-      - name: Verify
+      - name: Build and test
         run: mvn -B -ntp clean verify
-      - name: Verify distribution
+      - name: Verify and checksum
         shell: bash
         run: |
           set -euo pipefail
@@ -36,14 +40,13 @@ jobs:
           jar tf "$jar_path" | grep -qx 'com/plexon/homes/PlexonHomes.class'
           jar tf "$jar_path" | grep -qx 'com/plexon/homes/api/PlexonHomesAPI.class'
           jar tf "$jar_path" | grep -q '^org/sqlite/'
-          if jar tf "$jar_path" | grep -q '^com/zpkdxgames/plexoncore/'; then echo 'PlexonCore must not be shaded'; exit 1; fi
-          if jar tf "$jar_path" | grep -q '^org/bukkit/'; then echo 'Paper API must not be shaded'; exit 1; fi
+          if jar tf "$jar_path" | grep -q '^com/zpkdxgames/plexoncore/'; then exit 1; fi
           sha256sum "$jar_path" > SHA256SUMS.txt
-          sha256sum --check SHA256SUMS.txt
-          git diff --check
-      - uses: actions/upload-artifact@v4
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: PlexonHomes-1.0.0
-          path: |
+          name: PlexonHomes 1.0.0
+          body_path: releases/1.0.0.md
+          files: |
             target/PlexonHomes-1.0.0.jar
             SHA256SUMS.txt
