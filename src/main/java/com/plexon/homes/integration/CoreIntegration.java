@@ -13,8 +13,8 @@ import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class CoreIntegration {
-    private static final String MODULE_ID = "homes";
-    private static final String API_RANGE = ">=2.0 <3.0";
+    static final String MODULE_ID = "homes";
+    static final String API_RANGE = ">=2.0 <3.0";
     private final JavaPlugin plugin;
     private final PlexonCoreAPI core;
     private final PlayerWatchService playerWatches;
@@ -30,7 +30,7 @@ public final class CoreIntegration {
         }
         RegisteredServiceProvider<PlayerWatchService> watchRegistration = Bukkit.getServicesManager().getRegistration(PlayerWatchService.class);
         if (watchRegistration == null) {
-            throw new IllegalStateException("PlexonCore shared player watch runtime is unavailable; PlexonCore 2.0.3+ is required");
+            throw new IllegalStateException("PlexonCore shared player watch runtime is unavailable; PlexonCore 2.0.4 is required");
         }
         this.playerWatches = watchRegistration.getProvider();
     }
@@ -61,12 +61,17 @@ public final class CoreIntegration {
     public void failed(String detail) { update(ModuleState.FAILED, detail); }
 
     private void update(ModuleState state, String detail) {
-        if (registered) core.modules().updateState(MODULE_ID, state, detail);
+        if (!registered) return;
+        if (!core.modules().updateState(MODULE_ID, plugin, state, detail)) {
+            registered = false;
+            throw new IllegalStateException("PlexonCore module ownership changed before state transition to " + state);
+        }
     }
 
     public void unregister() {
         if (!registered) return;
-        core.modules().find(MODULE_ID).filter(d -> d.plugin() == plugin).ifPresent(d -> core.modules().unregister(MODULE_ID));
+        core.modules().updateState(MODULE_ID, plugin, ModuleState.DISABLED, "PlexonHomes disabled cleanly");
+        core.modules().unregisterOwnedBy(plugin);
         registered = false;
     }
 }
