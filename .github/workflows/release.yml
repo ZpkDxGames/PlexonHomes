@@ -19,34 +19,52 @@ jobs:
           java-version: '25'
           cache: maven
       - name: Verify tag
-        shell: bash
-        run: test "${GITHUB_REF_NAME}" = 'v1.0.0'
-      - name: Provision pinned PlexonCore 2.0.3
+        id: meta
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p libs
-          curl -fsSL -o libs/PlexonCore-2.0.3.jar https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.3/PlexonCore-2.0.3.jar
-          echo '4c47963ebe7f311917e967678d198f5ea1846fb8897fd607d7d0d734fd8a9f8e  libs/PlexonCore-2.0.3.jar' | sha256sum -c -
+          version=$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Provision pinned PlexonCore 2.0.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          core_jar="${RUNNER_TEMP}/PlexonCore-2.0.4.jar"
+          curl --fail --location --silent --show-error --output "$core_jar" \
+            https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar
+          echo '61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf  '"$core_jar" | sha256sum -c -
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
+            -Dfile="$core_jar" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore \
+            -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
       - name: Build and test
         run: mvn -B -ntp clean verify
       - name: Verify and checksum
         shell: bash
         run: |
           set -euo pipefail
-          jar_path=target/PlexonHomes-1.0.0.jar
+          jar_path="target/PlexonHomes-${{ steps.meta.outputs.version }}.jar"
           test -s "$jar_path"
-          jar tf "$jar_path" | grep -qx 'plugin.yml'
-          jar tf "$jar_path" | grep -qx 'com/plexon/homes/PlexonHomes.class'
-          jar tf "$jar_path" | grep -qx 'com/plexon/homes/api/PlexonHomesAPI.class'
-          jar tf "$jar_path" | grep -q '^org/sqlite/'
-          if jar tf "$jar_path" | grep -q '^com/zpkdxgames/plexoncore/'; then exit 1; fi
-          sha256sum "$jar_path" > SHA256SUMS.txt
+          jar tf "$jar_path" > target/jar-contents.txt
+          grep -qx 'plugin.yml' target/jar-contents.txt
+          grep -qx 'com/plexon/homes/PlexonHomes.class' target/jar-contents.txt
+          grep -qx 'com/plexon/homes/api/PlexonHomesAPI.class' target/jar-contents.txt
+          grep -q '^org/sqlite/' target/jar-contents.txt
+          if grep -q '^com/zpkdxgames/plexoncore/' target/jar-contents.txt; then exit 1; fi
+          (cd target && sha256sum "PlexonHomes-${{ steps.meta.outputs.version }}.jar" > SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
+      - name: Refuse mutable stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists; refusing to replace assets." >&2
+            exit 1
+          fi
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: PlexonHomes 1.0.0
-          body_path: releases/1.0.0.md
+          name: PlexonHomes ${{ steps.meta.outputs.version }}
+          body_path: releases/${{ steps.meta.outputs.version }}.md
           files: |
-            target/PlexonHomes-1.0.0.jar
-            SHA256SUMS.txt
+            target/PlexonHomes-${{ steps.meta.outputs.version }}.jar
+            target/SHA256SUMS.txt
