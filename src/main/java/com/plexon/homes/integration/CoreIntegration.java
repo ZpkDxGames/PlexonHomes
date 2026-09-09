@@ -64,7 +64,7 @@ public final class CoreIntegration {
         if (!registered) return;
         if (!core.modules().updateState(MODULE_ID, plugin, state, detail)) {
             registered = false;
-            throw new IllegalStateException("PlexonCore module ownership changed before state transition to " + state);
+            plugin.getLogger().severe("PlexonCore rejected " + MODULE_ID + " state transition because module ownership changed.");
         }
     }
 
