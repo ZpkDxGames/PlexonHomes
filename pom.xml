@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.plexon</groupId>
   <artifactId>PlexonHomes</artifactId>
-  <version>1.0.0</version>
+  <version>1.0.1</version>
   <name>PlexonHomes</name>
   <description>Core-native homes and safe teleport module for PlexonCraft.</description>
   <properties>
@@ -11,6 +11,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.build.outputTimestamp>2026-09-09T00:00:00Z</project.build.outputTimestamp>
     <paper.version>26.2.build.121-stable</paper.version>
+    <core.version>2.0.4</core.version>
     <sqlite.version>3.53.4.0</sqlite.version>
     <junit.version>5.12.2</junit.version>
   </properties>
@@ -30,9 +31,8 @@
     <dependency>
       <groupId>com.zpkdxgames</groupId>
       <artifactId>PlexonCore</artifactId>
-      <version>2.0.3</version>
-      <scope>system</scope>
-      <systemPath>${project.basedir}/libs/PlexonCore-2.0.3.jar</systemPath>
+      <version>${core.version}</version>
+      <scope>provided</scope>
     </dependency>
     <dependency>
       <groupId>org.xerial</groupId>
