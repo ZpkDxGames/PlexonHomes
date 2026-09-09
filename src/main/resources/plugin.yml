@@ -1,0 +1,63 @@
+name: PlexonHomes
+version: '${project.version}'
+main: com.plexon.homes.PlexonHomes
+api-version: '26.2'
+author: Tonim (ZpkDxGames)
+description: Core-native homes and safe teleportation for PlexonCraft.
+website: https://github.com/ZpkDxGames/PlexonHomes
+depend:
+  - PlexonCore
+softdepend:
+  - Vault
+  - PlaceholderAPI
+  - PlexonRanks
+  - PlexonQuests
+commands:
+  sethome:
+    description: Set or overwrite a home.
+    usage: /sethome [name]
+    aliases: [seth]
+    permission: plexonhomes.sethome
+  home:
+    description: Teleport to a home.
+    usage: /home [name]
+    aliases: [h]
+    permission: plexonhomes.use
+  homes:
+    description: Open the homes browser.
+    usage: /homes
+    permission: plexonhomes.gui
+  delhome:
+    description: Delete a home.
+    usage: /delhome <name>
+    aliases: [delh]
+    permission: plexonhomes.delete
+  renamehome:
+    description: Rename a home.
+    usage: /renamehome <old> <new>
+    permission: plexonhomes.rename
+  homesadmin:
+    description: PlexonHomes administration and migration.
+    usage: /homesadmin <reload|diagnostics|backup|migrate>
+    permission: plexonhomes.admin
+permissions:
+  plexonhomes.use: {default: true}
+  plexonhomes.sethome: {default: true}
+  plexonhomes.delete: {default: true}
+  plexonhomes.rename: {default: true}
+  plexonhomes.gui: {default: true}
+  plexonhomes.limit.unlimited: {default: op}
+  plexonhomes.teleport.warmup.bypass: {default: op}
+  plexonhomes.teleport.cooldown.bypass: {default: op}
+  plexonhomes.teleport.fee.bypass: {default: op}
+  plexonhomes.admin:
+    default: op
+    children:
+      plexonhomes.admin.reload: true
+      plexonhomes.admin.manage: true
+      plexonhomes.admin.migrate: true
+      plexonhomes.admin.diagnostics: true
+  plexonhomes.admin.reload: {default: op}
+  plexonhomes.admin.manage: {default: op}
+  plexonhomes.admin.migrate: {default: op}
+  plexonhomes.admin.diagnostics: {default: op}

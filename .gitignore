@@ -1,0 +1,7 @@
+target/
+libs/*.jar
+.idea/
+.vscode/
+*.iml
+*.log
+.DS_Store
