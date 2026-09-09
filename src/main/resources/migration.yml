@@ -1,0 +1,3 @@
+source: Essentials
+mode: PRIMARY
+conflict-mode: SKIP_EXISTING
