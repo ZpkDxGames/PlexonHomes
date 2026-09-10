@@ -4,7 +4,7 @@ public enum HomeTeleportStatus {
     STARTED,
     TELEPORTED,
     HOME_NOT_FOUND,
-    PROFILE_LOADING,
+    ALREADY_PENDING,
     COOLDOWN,
     WORLD_BLOCKED,
     UNSAFE_DESTINATION,

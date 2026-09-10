@@ -4,7 +4,8 @@ import java.util.UUID;
 
 public record HomeView(
         UUID ownerId,
-        String id,
+        UUID homeId,
+        String nameKey,
         String displayName,
         UUID worldId,
         String worldName,
@@ -15,4 +16,7 @@ public record HomeView(
         float pitch,
         long createdAt,
         long updatedAt,
-        long revision) {}
+        long revision) {
+    /** 1.x source-compatibility alias. Not authoritative identity in 2.x. */
+    public String id() { return nameKey; }
+}

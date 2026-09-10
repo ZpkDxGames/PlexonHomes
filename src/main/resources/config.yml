@@ -1,3 +1,4 @@
+config-version: 2
 homes:
   default-name: home
   max-name-length: 24
@@ -25,5 +26,7 @@ safe-teleport:
   search-nearby: true
   horizontal-radius: 3
   vertical-radius: 4
+gui:
+  delete-confirmation-seconds: 15
 migration:
   mode: PRIMARY

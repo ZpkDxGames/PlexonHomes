@@ -9,17 +9,10 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public final class EconomyBridge {
     public record ChargeResult(boolean success, double charged, String reason) {}
-
     private final JavaPlugin plugin;
-    private Object economy;
-    private Method has;
-    private Method withdraw;
-    private Method deposit;
+    private Object economy; private Method has; private Method withdraw; private Method deposit;
 
-    public EconomyBridge(JavaPlugin plugin) {
-        this.plugin = plugin;
-        refresh();
-    }
+    public EconomyBridge(JavaPlugin plugin) { this.plugin = plugin; refresh(); }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     public final void refresh() {
@@ -32,9 +25,7 @@ public final class EconomyBridge {
             has = economyClass.getMethod("has", OfflinePlayer.class, double.class);
             withdraw = economyClass.getMethod("withdrawPlayer", OfflinePlayer.class, double.class);
             deposit = economyClass.getMethod("depositPlayer", OfflinePlayer.class, double.class);
-        } catch (ReflectiveOperationException ignored) {
-            economy = null;
-        }
+        } catch (ReflectiveOperationException ignored) { economy = null; }
     }
 
     public boolean available() { return economy != null; }
@@ -43,11 +34,9 @@ public final class EconomyBridge {
         if (amount <= 0.0D || player.hasPermission("plexonhomes.teleport.fee.bypass")) return new ChargeResult(true, 0.0D, "bypass");
         if (economy == null) return new ChargeResult(false, 0.0D, "economy-unavailable");
         try {
-            boolean enough = (boolean) has.invoke(economy, player, amount);
-            if (!enough) return new ChargeResult(false, 0.0D, "insufficient-funds");
+            if (!(boolean) has.invoke(economy, player, amount)) return new ChargeResult(false, 0.0D, "insufficient-funds");
             Object response = withdraw.invoke(economy, player, amount);
-            Method success = response.getClass().getMethod("transactionSuccess");
-            if (!(boolean) success.invoke(response)) return new ChargeResult(false, 0.0D, "withdraw-failed");
+            if (!transactionSuccess(response)) return new ChargeResult(false, 0.0D, "withdraw-failed");
             return new ChargeResult(true, amount, "charged");
         } catch (ReflectiveOperationException exception) {
             plugin.getLogger().warning("Vault economy operation failed: " + exception.getMessage());
@@ -55,9 +44,16 @@ public final class EconomyBridge {
         }
     }
 
-    public void refund(Player player, double amount) {
-        if (amount <= 0.0D || economy == null) return;
-        try { deposit.invoke(economy, player, amount); }
-        catch (ReflectiveOperationException exception) { plugin.getLogger().severe("Unable to refund home teleport fee: " + exception.getMessage()); }
+    /** Returns true only when Vault confirms the compensating deposit. */
+    public boolean refund(Player player, double amount) {
+        if (amount <= 0.0D) return true;
+        if (economy == null) return false;
+        try { return transactionSuccess(deposit.invoke(economy, player, amount)); }
+        catch (ReflectiveOperationException exception) { plugin.getLogger().severe("Unable to refund home teleport fee: " + exception.getMessage()); return false; }
+    }
+
+    private static boolean transactionSuccess(Object response) throws ReflectiveOperationException {
+        if (response == null) return false;
+        Method success = response.getClass().getMethod("transactionSuccess"); return (boolean) success.invoke(response);
     }
 }
