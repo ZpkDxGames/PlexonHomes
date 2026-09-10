@@ -5,16 +5,11 @@ api-version: '26.2'
 author: Tonim (ZpkDxGames)
 description: Core-native homes and safe teleportation for PlexonCraft.
 website: https://github.com/ZpkDxGames/PlexonHomes
-depend:
-  - PlexonCore
-softdepend:
-  - Vault
-  - PlaceholderAPI
-  - PlexonRanks
-  - PlexonQuests
+depend: [PlexonCore]
+softdepend: [Vault, PlaceholderAPI, PlexonRanks, PlexonQuests]
 commands:
   sethome:
-    description: Set or overwrite a home.
+    description: Set or explicitly overwrite a home while preserving its stable identity.
     usage: /sethome [name]
     aliases: [seth]
     permission: plexonhomes.sethome
@@ -33,12 +28,12 @@ commands:
     aliases: [delh]
     permission: plexonhomes.delete
   renamehome:
-    description: Rename a home.
+    description: Rename a home without changing its stable identity.
     usage: /renamehome <old> <new>
     permission: plexonhomes.rename
   homesadmin:
-    description: PlexonHomes administration and migration.
-    usage: /homesadmin <reload|diagnostics|backup|migrate>
+    description: PlexonHomes administration, diagnostics and migration.
+    usage: /homesadmin <reload|diagnostics|backup|inspect|migrate>
     permission: plexonhomes.admin
 permissions:
   plexonhomes.use: {default: true}

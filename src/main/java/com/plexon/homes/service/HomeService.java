@@ -17,11 +17,13 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
+import org.bukkit.permissions.PermissionAttachmentInfo;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class HomeService {
@@ -31,23 +33,31 @@ public final class HomeService {
     private final Supplier<Snapshot> config;
     private final ConcurrentHashMap<UUID, Map<String, Home>> profiles = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, CompletableFuture<Void>> loading = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, AtomicLong> loadGenerations = new ConcurrentHashMap<>();
+    private final java.util.Set<UUID> mutating = ConcurrentHashMap.newKeySet();
 
     public HomeService(JavaPlugin plugin, HomeRepository repository, SafeTeleportService safeTeleport, Supplier<Snapshot> config) {
-        this.plugin = plugin;
-        this.repository = repository;
-        this.safeTeleport = safeTeleport;
-        this.config = config;
+        this.plugin = plugin; this.repository = repository; this.safeTeleport = safeTeleport; this.config = config;
     }
 
     public CompletableFuture<Void> ensureLoaded(UUID playerId) {
         if (profiles.containsKey(playerId)) return CompletableFuture.completedFuture(null);
-        return loading.computeIfAbsent(playerId, id -> repository.loadHomes(id)
-                .thenAccept(homes -> {
-                    Map<String, Home> map = new LinkedHashMap<>();
-                    for (Home home : homes) map.put(home.id(), home);
-                    profiles.put(id, Map.copyOf(map));
-                })
-                .whenComplete((ignored, throwable) -> loading.remove(id)));
+        CompletableFuture<Void> existing = loading.get(playerId);
+        if (existing != null) return existing;
+        long generation = loadGenerations.computeIfAbsent(playerId, ignored -> new AtomicLong()).get();
+        CompletableFuture<Void> created = repository.loadHomes(playerId).thenAccept(homes -> {
+            if (loadGenerations.computeIfAbsent(playerId, ignored -> new AtomicLong()).get() != generation) return;
+            Map<String, Home> map = new LinkedHashMap<>();
+            for (Home home : homes) {
+                Home previous = map.put(home.nameKey(), home);
+                if (previous != null) throw new IllegalStateException("Duplicate cached home name for " + playerId + ": " + home.nameKey());
+            }
+            profiles.put(playerId, Map.copyOf(map));
+        });
+        CompletableFuture<Void> raced = loading.putIfAbsent(playerId, created);
+        if (raced != null) return raced;
+        created.whenComplete((ignored, error) -> loading.remove(playerId, created));
+        return created;
     }
 
     public boolean isLoaded(UUID playerId) { return profiles.containsKey(playerId); }
@@ -55,9 +65,9 @@ public final class HomeService {
     public List<Home> listCached(UUID playerId) {
         Map<String, Home> map = profiles.get(playerId);
         if (map == null) return List.of();
-        String defaultName = config.get().defaultName().toLowerCase(java.util.Locale.ROOT);
+        String defaultName = HomeNames.normalize(config.get().defaultName(), config.get().maxNameLength()).orElse("home");
         List<Home> homes = new ArrayList<>(map.values());
-        homes.sort(Comparator.comparing((Home h) -> !h.id().equals(defaultName)).thenComparingLong(Home::createdAt));
+        homes.sort(Comparator.comparing((Home h) -> !h.nameKey().equals(defaultName)).thenComparingLong(Home::createdAt));
         return List.copyOf(homes);
     }
 
@@ -67,111 +77,177 @@ public final class HomeService {
         return HomeNames.normalize(name, config.get().maxNameLength()).map(map::get);
     }
 
+    public Optional<Home> findByIdCached(UUID playerId, UUID homeId) {
+        if (homeId == null) return Optional.empty();
+        Map<String, Home> map = profiles.get(playerId);
+        if (map == null) return Optional.empty();
+        return map.values().stream().filter(home -> home.homeId().equals(homeId)).findFirst();
+    }
+
     public HomeLimitView limit(Player player) {
         Snapshot snapshot = config.get();
-        if (player.hasPermission("plexonhomes.limit.unlimited")) return HomeLimitView.unlimited("permission plexonhomes.limit.unlimited");
+        if (player.hasPermission(snapshot.unlimitedPermission())) return HomeLimitView.unlimited("permission " + snapshot.unlimitedPermission());
         int highest = -1;
-        for (int i = 1; i <= 20; i++) if (player.hasPermission("plexonhomes.limit." + i)) highest = i;
-        if (highest >= 0) return new HomeLimitView(highest, false, "permission plexonhomes.limit." + highest);
+        String prefix = snapshot.permissionPrefix().toLowerCase(java.util.Locale.ROOT);
+        for (PermissionAttachmentInfo info : player.getEffectivePermissions()) {
+            if (!info.getValue()) continue;
+            String permission = info.getPermission().toLowerCase(java.util.Locale.ROOT);
+            if (!permission.startsWith(prefix)) continue;
+            String suffix = permission.substring(prefix.length());
+            try { highest = Math.max(highest, Integer.parseInt(suffix)); }
+            catch (NumberFormatException ignored) { }
+        }
+        if (highest >= 0) return new HomeLimitView(highest, false, "permission " + snapshot.permissionPrefix() + highest);
         return new HomeLimitView(snapshot.defaultLimit(), false, "config default");
     }
 
-    public boolean setHomeNow(Player player, String suppliedName) {
+    public CompletableFuture<Boolean> setHome(Player player, String suppliedName) {
+        UUID owner = player.getUniqueId();
+        return ensureLoaded(owner).thenCompose(ignored -> onMain(() -> prepareSet(player, suppliedName))).thenCompose(plan -> {
+            if (plan == null) return CompletableFuture.completedFuture(false);
+            return repository.upsert(plan.home).thenCompose(ignored -> onMain(() -> {
+                Map<String, Home> current = profiles.get(owner);
+                if (current != null) {
+                    Map<String, Home> next = new LinkedHashMap<>(current); next.put(plan.home.nameKey(), plan.home); profiles.put(owner, Map.copyOf(next));
+                }
+                repository.rememberPlayer(owner, player.getName());
+                Bukkit.getPluginManager().callEvent(new PlexonHomeSetEvent(player, plan.home.view(), plan.previous != null));
+                return true;
+            })).whenComplete((ok, error) -> mutating.remove(owner));
+        }).exceptionally(error -> { mutating.remove(owner); plugin.getLogger().severe("Failed to persist home for " + owner + ": " + rootMessage(error)); return false; });
+    }
+
+    private SetPlan prepareSet(Player player, String suppliedName) {
         requirePrimary();
         UUID owner = player.getUniqueId();
+        if (!mutating.add(owner)) return null;
         Map<String, Home> current = profiles.get(owner);
-        if (current == null) return false;
+        if (current == null) { mutating.remove(owner); return null; }
         Snapshot snapshot = config.get();
         String display = suppliedName == null || suppliedName.isBlank() ? snapshot.defaultName() : suppliedName.trim();
         Optional<String> normalized = HomeNames.normalize(display, snapshot.maxNameLength());
-        if (normalized.isEmpty()) return false;
-        if (!snapshot.canSetIn(player.getWorld())) return false;
         Location location = player.getLocation();
-        if (!Double.isFinite(location.getX()) || !Double.isFinite(location.getY()) || !Double.isFinite(location.getZ())) return false;
-        if (snapshot.safeTeleport() && !safeTeleport.isSafe(location)) return false;
-
-        String id = normalized.get();
-        Home previous = current.get(id);
+        if (normalized.isEmpty() || !snapshot.canSetIn(player.getWorld()) || !validLocation(location) || (snapshot.safeTeleport() && !safeTeleport.isSafe(location))) {
+            mutating.remove(owner); return null;
+        }
+        String nameKey = normalized.get();
+        Home previous = current.get(nameKey);
         HomeLimitView limit = limit(player);
-        if (previous == null && !limit.unlimited() && current.size() >= limit.limit()) return false;
-
+        if (previous == null && !limit.unlimited() && current.size() >= limit.limit()) { mutating.remove(owner); return null; }
         long now = System.currentTimeMillis();
-        long revision = previous == null ? 1L : previous.revision() + 1L;
-        long created = previous == null ? now : previous.createdAt();
         World world = location.getWorld();
-        Home home = new Home(owner, id, display, world.getUID(), world.getName(), location.getX(), location.getY(), location.getZ(), location.getYaw(), location.getPitch(), created, now, revision);
-        Map<String, Home> next = new LinkedHashMap<>(current);
-        next.put(id, home);
-        profiles.put(owner, Map.copyOf(next));
-        repository.upsert(home).exceptionally(error -> { plugin.getLogger().severe("Failed to persist home " + owner + "/" + id + ": " + error.getMessage()); return null; });
-        repository.rememberPlayer(owner, player.getName());
-        Bukkit.getPluginManager().callEvent(new PlexonHomeSetEvent(player, home.view(), previous != null));
-        return true;
+        Home home = previous == null
+                ? new Home(owner, UUID.randomUUID(), nameKey, display, world.getUID(), world.getName(), location.getX(), location.getY(), location.getZ(), location.getYaw(), location.getPitch(), now, now, 1L)
+                : new Home(owner, previous.homeId(), nameKey, display, world.getUID(), world.getName(), location.getX(), location.getY(), location.getZ(), location.getYaw(), location.getPitch(), previous.createdAt(), now, previous.revision() + 1L);
+        return new SetPlan(previous, home);
     }
 
-    public boolean deleteHomeNow(Player player, String suppliedName) {
-        requirePrimary();
-        UUID owner = player.getUniqueId();
-        Map<String, Home> current = profiles.get(owner);
-        if (current == null) return false;
-        Optional<String> normalized = HomeNames.normalize(suppliedName, config.get().maxNameLength());
-        if (normalized.isEmpty()) return false;
-        Home removed = current.get(normalized.get());
-        if (removed == null) return false;
-        Map<String, Home> next = new LinkedHashMap<>(current);
-        next.remove(normalized.get());
-        profiles.put(owner, Map.copyOf(next));
-        repository.delete(owner, normalized.get()).exceptionally(error -> { plugin.getLogger().severe("Failed to delete home from SQLite: " + error.getMessage()); return null; });
-        Bukkit.getPluginManager().callEvent(new PlexonHomeDeletedEvent(player, removed.view()));
-        return true;
+    public CompletableFuture<Boolean> deleteHome(Player player, String suppliedName) {
+        return ensureLoaded(player.getUniqueId()).thenCompose(ignored -> onMain(() -> findCached(player.getUniqueId(), suppliedName).orElse(null)))
+                .thenCompose(home -> home == null ? CompletableFuture.completedFuture(false) : deleteHome(player, home.homeId(), home.revision()));
     }
 
-    public boolean renameHomeNow(Player player, String oldName, String newName) {
-        requirePrimary();
+    public CompletableFuture<Boolean> deleteHome(Player player, UUID homeId, long expectedRevision) {
         UUID owner = player.getUniqueId();
-        Map<String, Home> current = profiles.get(owner);
-        if (current == null) return false;
-        Optional<String> oldId = HomeNames.normalize(oldName, config.get().maxNameLength());
-        Optional<String> newId = HomeNames.normalize(newName, config.get().maxNameLength());
-        if (oldId.isEmpty() || newId.isEmpty() || current.containsKey(newId.get())) return false;
-        Home previous = current.get(oldId.get());
-        if (previous == null) return false;
-        long now = System.currentTimeMillis();
-        Home renamed = new Home(previous.ownerId(), newId.get(), newName.trim(), previous.worldId(), previous.worldName(), previous.x(), previous.y(), previous.z(), previous.yaw(), previous.pitch(), previous.createdAt(), now, previous.revision() + 1L);
-        Map<String, Home> next = new LinkedHashMap<>(current);
-        next.remove(oldId.get()); next.put(newId.get(), renamed);
-        profiles.put(owner, Map.copyOf(next));
-        repository.rename(previous, renamed).exceptionally(error -> { plugin.getLogger().severe("Failed to rename home in SQLite: " + error.getMessage()); return null; });
-        Bukkit.getPluginManager().callEvent(new PlexonHomeRenamedEvent(player, previous.view(), renamed.view()));
-        return true;
+        return ensureLoaded(owner).thenCompose(ignored -> onMain(() -> {
+            if (!mutating.add(owner)) return null;
+            Home current = findByIdCached(owner, homeId).orElse(null);
+            if (current == null || current.revision() != expectedRevision) { mutating.remove(owner); return null; }
+            return current;
+        })).thenCompose(home -> {
+            if (home == null) return CompletableFuture.completedFuture(false);
+            return repository.delete(owner, home.homeId()).thenCompose(ignored -> onMain(() -> {
+                Map<String, Home> current = profiles.get(owner);
+                if (current != null) { Map<String, Home> next = new LinkedHashMap<>(current); next.remove(home.nameKey()); profiles.put(owner, Map.copyOf(next)); }
+                Bukkit.getPluginManager().callEvent(new PlexonHomeDeletedEvent(player, home.view()));
+                return true;
+            })).whenComplete((ok, error) -> mutating.remove(owner));
+        }).exceptionally(error -> { mutating.remove(owner); plugin.getLogger().severe("Failed to delete home from SQLite: " + rootMessage(error)); return false; });
+    }
+
+    public CompletableFuture<Boolean> renameHome(Player player, String oldName, String newName) {
+        UUID owner = player.getUniqueId();
+        return ensureLoaded(owner).thenCompose(ignored -> onMain(() -> prepareRename(player, oldName, newName))).thenCompose(plan -> {
+            if (plan == null) return CompletableFuture.completedFuture(false);
+            return repository.upsert(plan.renamed).thenCompose(ignored -> onMain(() -> {
+                Map<String, Home> current = profiles.get(owner);
+                if (current != null) { Map<String, Home> next = new LinkedHashMap<>(current); next.remove(plan.previous.nameKey()); next.put(plan.renamed.nameKey(), plan.renamed); profiles.put(owner, Map.copyOf(next)); }
+                Bukkit.getPluginManager().callEvent(new PlexonHomeRenamedEvent(player, plan.previous.view(), plan.renamed.view()));
+                return true;
+            })).whenComplete((ok, error) -> mutating.remove(owner));
+        }).exceptionally(error -> { mutating.remove(owner); plugin.getLogger().severe("Failed to rename home in SQLite: " + rootMessage(error)); return false; });
+    }
+
+    private RenamePlan prepareRename(Player player, String oldName, String newName) {
+        requirePrimary(); UUID owner = player.getUniqueId(); if (!mutating.add(owner)) return null;
+        Map<String, Home> current = profiles.get(owner); if (current == null) { mutating.remove(owner); return null; }
+        Optional<String> oldKey = HomeNames.normalize(oldName, config.get().maxNameLength()); Optional<String> newKey = HomeNames.normalize(newName, config.get().maxNameLength());
+        if (oldKey.isEmpty() || newKey.isEmpty() || oldKey.get().equals(newKey.get()) || current.containsKey(newKey.get())) { mutating.remove(owner); return null; }
+        Home previous = current.get(oldKey.get()); if (previous == null) { mutating.remove(owner); return null; }
+        return new RenamePlan(previous, previous.withName(newKey.get(), newName.trim(), System.currentTimeMillis()));
+    }
+
+    public CompletableFuture<Boolean> updateHomeLocation(Player player, UUID homeId, long expectedRevision) {
+        UUID owner = player.getUniqueId();
+        return ensureLoaded(owner).thenCompose(ignored -> onMain(() -> {
+            if (!mutating.add(owner)) return null;
+            Home previous = findByIdCached(owner, homeId).orElse(null); Location location = player.getLocation();
+            if (previous == null || previous.revision() != expectedRevision || !config.get().canSetIn(player.getWorld()) || !validLocation(location) || (config.get().safeTeleport() && !safeTeleport.isSafe(location))) {
+                mutating.remove(owner); return null;
+            }
+            return new SetPlan(previous, previous.withLocation(location, System.currentTimeMillis()));
+        })).thenCompose(plan -> {
+            if (plan == null) return CompletableFuture.completedFuture(false);
+            return repository.upsert(plan.home).thenCompose(ignored -> onMain(() -> {
+                Map<String, Home> current = profiles.get(owner);
+                if (current != null) { Map<String, Home> next = new LinkedHashMap<>(current); next.put(plan.home.nameKey(), plan.home); profiles.put(owner, Map.copyOf(next)); }
+                Bukkit.getPluginManager().callEvent(new PlexonHomeSetEvent(player, plan.home.view(), true)); return true;
+            })).whenComplete((ok, error) -> mutating.remove(owner));
+        }).exceptionally(error -> { mutating.remove(owner); plugin.getLogger().severe("Failed to update home location: " + rootMessage(error)); return false; });
     }
 
     public CompletableFuture<Boolean> importHome(Home home, boolean replaceExisting) {
-        return ensureLoaded(home.ownerId()).thenCompose(ignored -> onMain(() -> {
-            Map<String, Home> current = profiles.getOrDefault(home.ownerId(), Map.of());
-            if (!replaceExisting && current.containsKey(home.id())) return false;
-            Map<String, Home> next = new LinkedHashMap<>(current);
-            next.put(home.id(), home);
-            profiles.put(home.ownerId(), Map.copyOf(next));
-            repository.upsert(home);
-            return true;
-        }));
+        UUID owner = home.ownerId();
+        return ensureLoaded(owner).thenCompose(ignored -> onMain(() -> {
+            if (!mutating.add(owner)) return null;
+            Map<String, Home> current = profiles.getOrDefault(owner, Map.of());
+            if (!replaceExisting && current.containsKey(home.nameKey())) { mutating.remove(owner); return null; }
+            Home collision = current.get(home.nameKey());
+            Home candidate = collision != null && replaceExisting
+                    ? new Home(owner, collision.homeId(), home.nameKey(), home.displayName(), home.worldId(), home.worldName(), home.x(), home.y(), home.z(), home.yaw(), home.pitch(), collision.createdAt(), System.currentTimeMillis(), collision.revision() + 1L)
+                    : home;
+            return candidate;
+        })).thenCompose(candidate -> {
+            if (candidate == null) return CompletableFuture.completedFuture(false);
+            return repository.upsert(candidate).thenCompose(ignored -> onMain(() -> {
+                Map<String, Home> current = profiles.get(owner); if (current != null) { Map<String, Home> next = new LinkedHashMap<>(current); next.put(candidate.nameKey(), candidate); profiles.put(owner, Map.copyOf(next)); }
+                return true;
+            })).whenComplete((ok, error) -> mutating.remove(owner));
+        }).exceptionally(error -> { mutating.remove(owner); plugin.getLogger().severe("Failed to import home: " + rootMessage(error)); return false; });
     }
 
-    public void clearProfile(UUID playerId) { profiles.remove(playerId); loading.remove(playerId); }
+    public CompletableFuture<List<Home>> inspectPersisted(UUID owner) { return repository.loadHomes(owner); }
+
+    public void clearProfile(UUID playerId) {
+        loadGenerations.computeIfAbsent(playerId, ignored -> new AtomicLong()).incrementAndGet(); profiles.remove(playerId); loading.remove(playerId);
+    }
     public int loadedProfiles() { return profiles.size(); }
     public int cachedHomes() { return profiles.values().stream().mapToInt(Map::size).sum(); }
+    public int activeMutations() { return mutating.size(); }
+
+    private static boolean validLocation(Location location) {
+        return location != null && location.getWorld() != null && Double.isFinite(location.getX()) && Double.isFinite(location.getY()) && Double.isFinite(location.getZ())
+                && Float.isFinite(location.getYaw()) && Float.isFinite(location.getPitch());
+    }
 
     private <T> CompletableFuture<T> onMain(java.util.concurrent.Callable<T> callable) {
+        if (Bukkit.isPrimaryThread()) { try { return CompletableFuture.completedFuture(callable.call()); } catch (Exception e) { return CompletableFuture.failedFuture(e); } }
         CompletableFuture<T> future = new CompletableFuture<>();
-        Bukkit.getScheduler().runTask(plugin, () -> {
-            try { future.complete(callable.call()); }
-            catch (Throwable throwable) { future.completeExceptionally(throwable); }
-        });
-        return future;
+        Bukkit.getScheduler().runTask(plugin, () -> { try { future.complete(callable.call()); } catch (Throwable t) { future.completeExceptionally(t); } }); return future;
     }
 
-    private static void requirePrimary() {
-        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Home mutation must run on the primary thread");
-    }
+    private static String rootMessage(Throwable error) { Throwable cursor = error; while (cursor.getCause() != null) cursor = cursor.getCause(); return String.valueOf(cursor.getMessage()); }
+    private static void requirePrimary() { if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Home mutation must run on the primary thread"); }
+    private record SetPlan(Home previous, Home home) {}
+    private record RenamePlan(Home previous, Home renamed) {}
 }
