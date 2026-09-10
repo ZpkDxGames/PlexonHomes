@@ -5,6 +5,7 @@ import com.plexon.homes.api.HomeTeleportStatus;
 import com.plexon.homes.gui.HomesGui;
 import com.plexon.homes.migration.EssentialsMigrationService;
 import com.plexon.homes.migration.EssentialsMigrationService.Report;
+import com.plexon.homes.model.Home;
 import com.plexon.homes.service.HomeService;
 import com.plexon.homes.service.TeleportService;
 import com.plexon.homes.util.Text;
