@@ -1,0 +1,159 @@
+name: Recover PlexonHomes 2.0.0-rc.1 exact-tag release
+
+on:
+  push:
+    branches: [ops/v2.0.0-rc.1-exact-tag-release]
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: read
+
+env:
+  TAG: v2.0.0-rc.1
+  CANDIDATE: bf296d8ff36c9aef132b60205909e4782582168d
+  EXPECTED_JAR_SHA256: 0b74fad0974f69b0d91d75f75e1a5720a854ad0a34111119178d1d4b586d44dc
+  EXPECTED_JAR_BYTES: '12131569'
+
+jobs:
+  release-exact-tag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2.0.0-rc.1
+          fetch-depth: 0
+      - name: Prove immutable candidate boundary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          REF_JSON="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")"
+          echo "$REF_JSON" | jq -e --arg sha "$CANDIDATE" '.object.type == "commit" and .object.sha == $sha' >/dev/null
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$TAG release already exists; refusing replacement." >&2
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v2.0.0" >/dev/null 2>&1; then
+            echo 'Stable v2.0.0 tag must not exist.' >&2
+            exit 1
+          fi
+          if gh release view v2.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'Stable v2.0.0 release must not exist.' >&2
+            exit 1
+          fi
+          PR_JSON="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head phase2/2.0.0-premium-homes --json number,isDraft,headRefOid,state --limit 5)"
+          echo "$PR_JSON" | jq -e --arg sha "$CANDIDATE" 'length == 1 and .[0].number == 3 and .[0].isDraft == true and .[0].state == "OPEN" and .[0].headRefOid == $sha' >/dev/null
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Provision exact PlexonCore 2.0.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 -o /tmp/PlexonCore-2.0.4.jar https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar
+          echo '61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf  /tmp/PlexonCore-2.0.4.jar' | sha256sum -c -
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
+            -Dfile=/tmp/PlexonCore-2.0.4.jar -DgroupId=com.zpkdxgames -DartifactId=PlexonCore -Dversion=2.0.4 -Dpackaging=jar
+      - name: Rebuild exact tagged commit
+        run: mvn -B -ntp clean verify
+      - name: Verify exact-tag distribution and reproducibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/verify-distribution.sh target/PlexonHomes-2.0.0-rc.1.jar
+          actual_sha="$(sha256sum target/PlexonHomes-2.0.0-rc.1.jar | awk '{print $1}')"
+          actual_size="$(stat -c '%s' target/PlexonHomes-2.0.0-rc.1.jar)"
+          test "$actual_sha" = "$EXPECTED_JAR_SHA256"
+          test "$actual_size" = "$EXPECTED_JAR_BYTES"
+      - name: Write exact certification assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          totals = dict(tests=0, failures=0, errors=0, skipped=0)
+          for path in glob.glob('target/surefire-reports/TEST-*.xml'):
+              root = ET.parse(path).getroot()
+              for key in totals:
+                  totals[key] += int(root.attrib.get(key, 0))
+          text = f"{totals['tests']} executed / {totals['failures']} failures / {totals['errors']} errors / {totals['skipped']} skipped\n"
+          open('TEST_SUMMARY.txt', 'w').write(text)
+          print(text, end='')
+          PY
+          test "$(cat TEST_SUMMARY.txt)" = '61 executed / 0 failures / 0 errors / 0 skipped'
+          {
+            echo 'repository=ZpkDxGames/PlexonHomes'
+            echo "source_sha=$CANDIDATE"
+            echo 'version=2.0.0-rc.1'
+            echo 'java=25'
+            echo 'class_major=69'
+            echo 'plexoncore=2.0.4'
+            echo 'plexoncore_sha256=61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
+            echo 'rollback_tag=v1.0.1'
+            echo 'rollback_sha=d20bef0a76cd3006df51d46d67a3e48636650d31'
+            echo 'runtime_certification=NOT_EXECUTED'
+          } > PROVENANCE.txt
+          sha256sum target/PlexonHomes-2.0.0-rc.1.jar | sed 's#target/##' > SHA256SUMS.txt
+      - name: Publish immutable prerelease from exact tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            target/PlexonHomes-2.0.0-rc.1.jar SHA256SUMS.txt TEST_SUMMARY.txt PROVENANCE.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$CANDIDATE" \
+            --title 'PlexonHomes 2.0.0-rc.1' \
+            --notes-file releases/2.0.0-rc.1.md \
+            --prerelease
+
+  verify-published:
+    needs: release-exact-tag
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Independently download and verify published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF_JSON="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")"
+          echo "$REF_JSON" | jq -e --arg sha "$CANDIDATE" '.object.type == "commit" and .object.sha == $sha' >/dev/null
+
+          RELEASE_JSON="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isPrerelease,targetCommitish,assets)"
+          echo "$RELEASE_JSON" | jq -e '.tagName == "v2.0.0-rc.1" and .isPrerelease == true' >/dev/null
+          ACTUAL_ASSETS="$(echo "$RELEASE_JSON" | jq -r '.assets[].name' | sort)"
+          EXPECTED_ASSETS="$(printf '%s\n' PlexonHomes-2.0.0-rc.1.jar PROVENANCE.txt SHA256SUMS.txt TEST_SUMMARY.txt | sort)"
+          diff -u <(printf '%s\n' "$EXPECTED_ASSETS") <(printf '%s\n' "$ACTUAL_ASSETS")
+
+          PR_JSON="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head phase2/2.0.0-premium-homes --json number,isDraft,headRefOid,state --limit 5)"
+          echo "$PR_JSON" | jq -e --arg sha "$CANDIDATE" 'length == 1 and .[0].number == 3 and .[0].isDraft == true and .[0].state == "OPEN" and .[0].headRefOid == $sha' >/dev/null
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v2.0.0" >/dev/null 2>&1; then echo 'Stable v2.0.0 tag must not exist.' >&2; exit 1; fi
+          if gh release view v2.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo 'Stable v2.0.0 release must not exist.' >&2; exit 1; fi
+
+          mkdir -p /tmp/published
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir /tmp/published \
+            --pattern 'PlexonHomes-2.0.0-rc.1.jar' --pattern 'SHA256SUMS.txt' --pattern 'TEST_SUMMARY.txt' --pattern 'PROVENANCE.txt'
+          cd /tmp/published
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 4
+          sha256sum --check SHA256SUMS.txt
+          test "$(sha256sum PlexonHomes-2.0.0-rc.1.jar | awk '{print $1}')" = "$EXPECTED_JAR_SHA256"
+          test "$(stat -c '%s' PlexonHomes-2.0.0-rc.1.jar)" = "$EXPECTED_JAR_BYTES"
+          test "$(cat TEST_SUMMARY.txt)" = '61 executed / 0 failures / 0 errors / 0 skipped'
+          grep -Fx 'repository=ZpkDxGames/PlexonHomes' PROVENANCE.txt
+          grep -Fx "source_sha=$CANDIDATE" PROVENANCE.txt
+          grep -Fx 'version=2.0.0-rc.1' PROVENANCE.txt
+          grep -Fx 'java=25' PROVENANCE.txt
+          grep -Fx 'class_major=69' PROVENANCE.txt
+          grep -Fx 'plexoncore=2.0.4' PROVENANCE.txt
+          grep -Fx 'rollback_tag=v1.0.1' PROVENANCE.txt
+          grep -Fx 'rollback_sha=d20bef0a76cd3006df51d46d67a3e48636650d31' PROVENANCE.txt
+          grep -Fx 'runtime_certification=NOT_EXECUTED' PROVENANCE.txt
+          echo "published_jar_bytes=$(stat -c '%s' PlexonHomes-2.0.0-rc.1.jar)"
+          echo "published_jar_sha256=$(sha256sum PlexonHomes-2.0.0-rc.1.jar | awk '{print $1}')"
