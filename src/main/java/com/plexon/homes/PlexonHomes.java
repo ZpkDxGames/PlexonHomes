@@ -88,15 +88,27 @@ public final class PlexonHomes extends JavaPlugin {
         File file = new File(getDataFolder(), "config.yml"); return HomesConfig.load(YamlConfiguration.loadConfiguration(file));
     }
 
-    /** Converts the published 1.0.1 config shape once, after validating the candidate and before replacing the file. */
+    /** Converts only an absent/explicit numeric v1 marker; malformed/future markers fail closed without rewriting config. */
     private void migrateLegacyConfigIfNeeded() throws Exception {
         File file = new File(getDataFolder(), "config.yml"); YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
-        if (yaml.contains("config-version") && yaml.getInt("config-version") != 1) return;
+        int version = configVersionForMigration(yaml);
+        if (version == 2) return;
         yaml.set("config-version", 2); if (!yaml.contains("gui.delete-confirmation-seconds")) yaml.set("gui.delete-confirmation-seconds", 15);
         HomesConfig.load(yaml);
         Path backupDir = getDataFolder().toPath().resolve("backups"); Files.createDirectories(backupDir);
         Path backup = backupDir.resolve("config-v1-before-phase2.yml"); if (!Files.exists(backup)) Files.copy(file.toPath(), backup, StandardCopyOption.COPY_ATTRIBUTES);
         yaml.save(file);
+    }
+
+    static int configVersionForMigration(YamlConfiguration yaml) {
+        Object raw = yaml.get("config-version");
+        if (raw == null) return 1;
+        if (!(raw instanceof Number number)) throw new IllegalArgumentException("config-version must be an integer");
+        double numeric = number.doubleValue();
+        if (!Double.isFinite(numeric) || numeric != Math.rint(numeric)) throw new IllegalArgumentException("config-version must be an integer");
+        int version = (int) numeric;
+        if (version != 1 && version != 2) throw new IllegalArgumentException("config-version must be 1 for migration or 2 for Phase 2");
+        return version;
     }
 
     public synchronized ReloadResult reloadHomesConfigTransactional() {

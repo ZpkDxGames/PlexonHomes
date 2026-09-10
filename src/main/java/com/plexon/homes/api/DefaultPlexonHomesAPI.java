@@ -17,10 +17,11 @@ public final class DefaultPlexonHomesAPI implements PlexonHomesAPI {
     @Override public Optional<HomeView> homeById(UUID playerId, UUID homeId) { return homes.findByIdCached(playerId, homeId).map(Home::view); }
     @Override public int count(UUID playerId) { return homes.listCached(playerId).size(); }
     @Override public HomeLimitView limit(Player player) { return homes.limit(player); }
-    @Override public CompletableFuture<Boolean> setHome(Player player, String name) { return homes.setHome(player, name); }
-    @Override public CompletableFuture<Boolean> deleteHome(Player player, String name) { return homes.deleteHome(player, name); }
-    @Override public CompletableFuture<Boolean> renameHome(Player player, String oldName, String newName) { return homes.renameHome(player, oldName, newName); }
-    @Override public CompletableFuture<Boolean> updateHomeLocation(Player player, UUID homeId, long expectedRevision) { return homes.updateHomeLocation(player, homeId, expectedRevision); }
+    @Override public CompletableFuture<Boolean> setHome(Player player, String name) { return allowed(player, "plexonhomes.sethome") ? homes.setHome(player, name) : CompletableFuture.completedFuture(false); }
+    @Override public CompletableFuture<Boolean> deleteHome(Player player, String name) { return allowed(player, "plexonhomes.delete") ? homes.deleteHome(player, name) : CompletableFuture.completedFuture(false); }
+    @Override public CompletableFuture<Boolean> renameHome(Player player, String oldName, String newName) { return allowed(player, "plexonhomes.rename") ? homes.renameHome(player, oldName, newName) : CompletableFuture.completedFuture(false); }
+    @Override public CompletableFuture<Boolean> updateHomeLocation(Player player, UUID homeId, long expectedRevision) { return allowed(player, "plexonhomes.sethome") ? homes.updateHomeLocation(player, homeId, expectedRevision) : CompletableFuture.completedFuture(false); }
     @Override public CompletableFuture<HomeTeleportStatus> teleport(Player player, String homeName) { return teleports.request(player, homeName); }
     @Override public boolean isTeleportPending(UUID playerId) { return teleports.isPending(playerId); }
+    private static boolean allowed(Player player, String permission) { return player != null && player.isOnline() && player.hasPermission(permission); }
 }

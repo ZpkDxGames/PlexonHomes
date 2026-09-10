@@ -40,9 +40,18 @@ class HomesConfigTest {
               mode: PRIMARY
             """;
 
-    private static YamlConfiguration config() throws Exception { var yaml = new YamlConfiguration(); yaml.loadFromString(VALID); return yaml; }
+    private static YamlConfiguration config() throws Exception {
+        var yaml = new YamlConfiguration();
+        yaml.loadFromString(VALID);
+        return yaml;
+    }
 
-    @Test void acceptsPublishedPhase2Shape() throws Exception { var snapshot = HomesConfig.load(config()); assertEquals(2, snapshot.configVersion()); assertEquals(3, snapshot.defaultLimit()); assertEquals(2.5D, snapshot.fee()); }
+    @Test void acceptsPublishedPhase2Shape() throws Exception {
+        var snapshot = HomesConfig.load(config());
+        assertEquals(2, snapshot.configVersion());
+        assertEquals(3, snapshot.defaultLimit());
+        assertEquals(2.5D, snapshot.fee());
+    }
     @Test void rejectsMissingVersion() throws Exception { var yaml = config(); yaml.set("config-version", null); assertThrows(IllegalArgumentException.class, () -> HomesConfig.load(yaml)); }
     @Test void rejectsFutureVersion() throws Exception { var yaml = config(); yaml.set("config-version", 3); assertThrows(IllegalArgumentException.class, () -> HomesConfig.load(yaml)); }
     @Test void rejectsNegativeFeeInsteadOfClamping() throws Exception { var yaml = config(); yaml.set("teleport.fee", -1); assertThrows(IllegalArgumentException.class, () -> HomesConfig.load(yaml)); }
@@ -54,4 +63,8 @@ class HomesConfigTest {
     @Test void rejectsPermissionPrefixWithoutDot() throws Exception { var yaml = config(); yaml.set("limits.permission-prefix", "plexonhomes.limit"); assertThrows(IllegalArgumentException.class, () -> HomesConfig.load(yaml)); }
     @Test void rejectsInvalidDefaultHomeName() throws Exception { var yaml = config(); yaml.set("homes.default-name", "my home"); assertThrows(IllegalArgumentException.class, () -> HomesConfig.load(yaml)); }
     @Test void rejectsInvalidMigrationMode() throws Exception { var yaml = config(); yaml.set("migration.mode", "UNKNOWN"); assertThrows(IllegalArgumentException.class, () -> HomesConfig.load(yaml)); }
+    @Test void rejectsStringWhereIntegerRequired() throws Exception { var yaml = config(); yaml.set("teleport.warmup-seconds", "3"); assertThrows(IllegalArgumentException.class, () -> HomesConfig.load(yaml)); }
+    @Test void rejectsStringWhereFeeNumberRequired() throws Exception { var yaml = config(); yaml.set("teleport.fee", "2.5"); assertThrows(IllegalArgumentException.class, () -> HomesConfig.load(yaml)); }
+    @Test void rejectsStringWhereBooleanRequired() throws Exception { var yaml = config(); yaml.set("teleport.cancel-on-damage", "yes"); assertThrows(IllegalArgumentException.class, () -> HomesConfig.load(yaml)); }
+    @Test void rejectsScalarWhereWorldListRequired() throws Exception { var yaml = config(); yaml.set("worlds.set.values", "lobby"); assertThrows(IllegalArgumentException.class, () -> HomesConfig.load(yaml)); }
 }

@@ -56,6 +56,7 @@ jobs:
             echo 'plexoncore_sha256=61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
             echo 'rollback_tag=v1.0.1'
             echo 'rollback_sha=d20bef0a76cd3006df51d46d67a3e48636650d31'
+            echo 'runtime_certification=NOT_EXECUTED'
           } > PROVENANCE.txt
       - name: Checksum and whitespace
         shell: bash

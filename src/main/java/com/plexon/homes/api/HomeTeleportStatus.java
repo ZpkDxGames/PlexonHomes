@@ -3,7 +3,9 @@ package com.plexon.homes.api;
 public enum HomeTeleportStatus {
     STARTED,
     TELEPORTED,
+    PERMISSION_DENIED,
     HOME_NOT_FOUND,
+    LIMIT_RESTRICTED,
     ALREADY_PENDING,
     COOLDOWN,
     WORLD_BLOCKED,

@@ -101,7 +101,12 @@ public final class HomeService {
         return new HomeLimitView(snapshot.defaultLimit(), false, "config default");
     }
 
+    static boolean canCreateAtLimit(int currentCount, HomeLimitView limit) {
+        return limit.unlimited() || currentCount < limit.limit();
+    }
+
     public CompletableFuture<Boolean> setHome(Player player, String suppliedName) {
+        if (player == null || !player.hasPermission("plexonhomes.sethome")) return CompletableFuture.completedFuture(false);
         UUID owner = player.getUniqueId();
         return ensureLoaded(owner).thenCompose(ignored -> onMain(() -> prepareSet(player, suppliedName))).thenCompose(plan -> {
             if (plan == null) return CompletableFuture.completedFuture(false);
@@ -133,7 +138,7 @@ public final class HomeService {
         String nameKey = normalized.get();
         Home previous = current.get(nameKey);
         HomeLimitView limit = limit(player);
-        if (previous == null && !limit.unlimited() && current.size() >= limit.limit()) { mutating.remove(owner); return null; }
+        if (previous == null && !canCreateAtLimit(current.size(), limit)) { mutating.remove(owner); return null; }
         long now = System.currentTimeMillis();
         World world = location.getWorld();
         Home home = previous == null
@@ -143,11 +148,13 @@ public final class HomeService {
     }
 
     public CompletableFuture<Boolean> deleteHome(Player player, String suppliedName) {
+        if (player == null || !player.hasPermission("plexonhomes.delete")) return CompletableFuture.completedFuture(false);
         return ensureLoaded(player.getUniqueId()).thenCompose(ignored -> onMain(() -> findCached(player.getUniqueId(), suppliedName).orElse(null)))
                 .thenCompose(home -> home == null ? CompletableFuture.completedFuture(false) : deleteHome(player, home.homeId(), home.revision()));
     }
 
     public CompletableFuture<Boolean> deleteHome(Player player, UUID homeId, long expectedRevision) {
+        if (player == null || !player.hasPermission("plexonhomes.delete")) return CompletableFuture.completedFuture(false);
         UUID owner = player.getUniqueId();
         return ensureLoaded(owner).thenCompose(ignored -> onMain(() -> {
             if (!mutating.add(owner)) return null;
@@ -166,6 +173,7 @@ public final class HomeService {
     }
 
     public CompletableFuture<Boolean> renameHome(Player player, String oldName, String newName) {
+        if (player == null || !player.hasPermission("plexonhomes.rename")) return CompletableFuture.completedFuture(false);
         UUID owner = player.getUniqueId();
         return ensureLoaded(owner).thenCompose(ignored -> onMain(() -> prepareRename(player, oldName, newName))).thenCompose(plan -> {
             if (plan == null) return CompletableFuture.completedFuture(false);
@@ -188,6 +196,7 @@ public final class HomeService {
     }
 
     public CompletableFuture<Boolean> updateHomeLocation(Player player, UUID homeId, long expectedRevision) {
+        if (player == null || !player.hasPermission("plexonhomes.sethome")) return CompletableFuture.completedFuture(false);
         UUID owner = player.getUniqueId();
         return ensureLoaded(owner).thenCompose(ignored -> onMain(() -> {
             if (!mutating.add(owner)) return null;

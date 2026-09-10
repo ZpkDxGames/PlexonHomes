@@ -6,7 +6,7 @@ author: Tonim (ZpkDxGames)
 description: Core-native homes and safe teleportation for PlexonCraft.
 website: https://github.com/ZpkDxGames/PlexonHomes
 depend: [PlexonCore]
-softdepend: [Vault, PlaceholderAPI, PlexonRanks, PlexonQuests]
+softdepend: [Vault, TheosisEconomy, PlaceholderAPI, PlexonRanks, PlexonQuests]
 commands:
   sethome:
     description: Set or explicitly overwrite a home while preserving its stable identity.
