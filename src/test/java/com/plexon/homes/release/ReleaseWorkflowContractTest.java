@@ -32,7 +32,7 @@ class ReleaseWorkflowContractTest {
     @Test void sourceArtifactsCarryExactRollbackAndRuntimeProvenance() throws Exception {
         String build = Files.readString(Path.of(".github/workflows/build.yml"));
         assertTrue(build.contains("source_sha=$GITHUB_SHA"));
-        assertTrue(build.contains("version=2.0.0-rc.1"));
+        assertTrue(build.contains("version=2.0.0-rc.2"));
         assertTrue(build.contains("java=25"));
         assertTrue(build.contains("class_major=69"));
         assertTrue(build.contains("plexoncore=2.0.4"));
