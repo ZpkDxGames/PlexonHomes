@@ -4,7 +4,7 @@ homes:
   max-name-length: 24
   allow-use-above-limit: true
 limits:
-  default: 1
+  default: 15
   permission-prefix: plexonhomes.limit.
   unlimited-permission: plexonhomes.limit.unlimited
 worlds:

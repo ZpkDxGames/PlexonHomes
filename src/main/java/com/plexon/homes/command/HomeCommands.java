@@ -4,7 +4,7 @@ import com.plexon.homes.PlexonHomes;
 import com.plexon.homes.api.HomeTeleportStatus;
 import com.plexon.homes.gui.HomesGui;
 import com.plexon.homes.migration.EssentialsMigrationService;
-import com.plexon.homes.migration.EssentialsMigrationService.Report;
+import com.plexon.homes.migration.SetHomeMigrationService;
 import com.plexon.homes.model.Home;
 import com.plexon.homes.service.HomeService;
 import com.plexon.homes.service.TeleportService;
@@ -22,15 +22,18 @@ public final class HomeCommands implements CommandExecutor, TabCompleter {
     private final HomeService homes;
     private final TeleportService teleports;
     private final HomesGui gui;
-    private final EssentialsMigrationService migration;
+    private final EssentialsMigrationService essentialsMigration;
+    private final SetHomeMigrationService setHomeMigration;
 
     public HomeCommands(PlexonHomes plugin, HomeService homes, TeleportService teleports,
-                        HomesGui gui, EssentialsMigrationService migration) {
+                        HomesGui gui, EssentialsMigrationService essentialsMigration,
+                        SetHomeMigrationService setHomeMigration) {
         this.plugin = plugin;
         this.homes = homes;
         this.teleports = teleports;
         this.gui = gui;
-        this.migration = migration;
+        this.essentialsMigration = essentialsMigration;
+        this.setHomeMigration = setHomeMigration;
     }
 
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
@@ -78,7 +81,7 @@ public final class HomeCommands implements CommandExecutor, TabCompleter {
             return true;
         }
         if (args.length == 0) {
-            sender.sendMessage("/homesadmin reload|diagnostics|backup|inspect <uuid>|migrate <scan|plan|execute|status>");
+            sender.sendMessage("/homesadmin reload|diagnostics|backup|inspect <uuid>|migrate [essentials|sethome] <action>");
             return true;
         }
         switch (args[0].toLowerCase(java.util.Locale.ROOT)) {
@@ -90,7 +93,7 @@ public final class HomeCommands implements CommandExecutor, TabCompleter {
             case "diagnostics" -> tell(sender, "<gray>" + Text.escape(plugin.diagnostics()) + "</gray>");
             case "backup" -> plugin.backup()
                     .thenAccept(path -> tell(sender, "<green>Backup created: <white>" + Text.escape(path.toString()) + "</white></green>"))
-                    .exceptionally(error -> { tell(sender, "<red>Backup failed: " + Text.escape(rootMessage(error)) + "</red>"); return null; });
+                    .exceptionally(error -> migrationFailure(sender, "Backup", error));
             case "inspect" -> {
                 if (args.length < 2) { sender.sendMessage("/homesadmin inspect <player-uuid>"); return true; }
                 UUID owner;
@@ -100,31 +103,94 @@ public final class HomeCommands implements CommandExecutor, TabCompleter {
                         "<aqua>Homes for <white>" + owner + "</white>: <white>" + list.size() + "</white> — "
                                 + Text.escape(list.stream().map(home -> home.displayName() + "@" + home.worldName()
                                 + "[r" + home.revision() + "]").toList().toString()) + "</aqua>"))
-                        .exceptionally(error -> { tell(sender, "<red>Inspection failed: " + Text.escape(rootMessage(error)) + "</red>"); return null; });
+                        .exceptionally(error -> migrationFailure(sender, "Inspection", error));
             }
-            case "migrate" -> {
-                if (args.length < 2) { sender.sendMessage("/homesadmin migrate scan|plan|execute|status"); return true; }
-                switch (args[1].toLowerCase(java.util.Locale.ROOT)) {
-                    case "scan" -> migration.scan().thenAccept(report -> tell(sender, "<gray>" + Text.escape(format(report)) + "</gray>"));
-                    case "plan" -> tell(sender, "<gray>" + Text.escape(format(migration.markPlanned())) + "</gray>");
-                    case "execute" -> migration.execute(false).thenAccept(report -> tell(sender, "<gray>" + Text.escape(format(report)) + "</gray>"));
-                    case "status" -> tell(sender, "<gray>" + Text.escape(format(migration.status())) + "</gray>");
-                    default -> sender.sendMessage("Unknown migration action.");
-                }
-            }
+            case "migrate" -> migrate(sender, args);
             default -> sender.sendMessage("Unknown admin action.");
         }
         return true;
+    }
+
+    private void migrate(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("/homesadmin migrate [essentials|sethome] <scan|plan|execute|verify|status>");
+            return;
+        }
+
+        String provider = args[1].toLowerCase(java.util.Locale.ROOT);
+        if (provider.equals("essentials") || provider.equals("sethome")) {
+            if (args.length < 3) {
+                sender.sendMessage("/homesadmin migrate " + provider + " <scan|plan|execute|verify|status>");
+                return;
+            }
+            if (provider.equals("sethome")) setHomeMigration(sender, args[2]);
+            else essentialsMigration(sender, args[2]);
+            return;
+        }
+
+        // Phase 2 compatibility: /homesadmin migrate scan|plan|execute|status remains Essentials.
+        essentialsMigration(sender, provider);
+    }
+
+    private void essentialsMigration(CommandSender sender, String action) {
+        switch (action.toLowerCase(java.util.Locale.ROOT)) {
+            case "scan" -> essentialsMigration.scan()
+                    .thenAccept(report -> tell(sender, "<gray>" + Text.escape(format(report)) + "</gray>"))
+                    .exceptionally(error -> migrationFailure(sender, "Essentials scan", error));
+            case "plan" -> tell(sender, "<gray>" + Text.escape(format(essentialsMigration.markPlanned())) + "</gray>");
+            case "execute" -> essentialsMigration.execute(false)
+                    .thenAccept(report -> tell(sender, "<gray>" + Text.escape(format(report)) + "</gray>"))
+                    .exceptionally(error -> migrationFailure(sender, "Essentials execute", error));
+            case "status" -> tell(sender, "<gray>" + Text.escape(format(essentialsMigration.status())) + "</gray>");
+            default -> sender.sendMessage("Unknown Essentials migration action.");
+        }
+    }
+
+    private void setHomeMigration(CommandSender sender, String action) {
+        switch (action.toLowerCase(java.util.Locale.ROOT)) {
+            case "scan" -> setHomeMigration.scan()
+                    .thenAccept(report -> tell(sender, "<gray>" + Text.escape(format(report)) + "</gray>"))
+                    .exceptionally(error -> migrationFailure(sender, "SetHome scan", error));
+            case "plan" -> setHomeMigration.plan()
+                    .thenAccept(report -> tell(sender, "<gray>" + Text.escape(format(report)) + "</gray>"))
+                    .exceptionally(error -> migrationFailure(sender, "SetHome plan", error));
+            case "execute" -> setHomeMigration.execute()
+                    .thenAccept(report -> tell(sender, "<gray>" + Text.escape(format(report)) + "</gray>"))
+                    .exceptionally(error -> migrationFailure(sender, "SetHome execute", error));
+            case "verify" -> setHomeMigration.verify()
+                    .thenAccept(report -> tell(sender, "<gray>" + Text.escape(format(report)) + "</gray>"))
+                    .exceptionally(error -> migrationFailure(sender, "SetHome verify", error));
+            case "status" -> tell(sender, "<gray>" + Text.escape(format(setHomeMigration.status())) + "</gray>");
+            default -> sender.sendMessage("Unknown SetHome migration action.");
+        }
+    }
+
+    private Void migrationFailure(CommandSender sender, String operation, Throwable error) {
+        tell(sender, "<red>" + Text.escape(operation) + " failed: " + Text.escape(rootMessage(error)) + "</red>");
+        return null;
     }
 
     private void tell(CommandSender sender, String miniMessage) {
         plugin.runPrimary(() -> sender.sendMessage(Text.mm(miniMessage)));
     }
 
-    private static String format(Report report) {
-        return "Migration " + report.status() + ": files=" + report.files() + ", players=" + report.players()
+    private static String format(EssentialsMigrationService.Report report) {
+        return "Essentials migration " + report.status() + ": files=" + report.files() + ", players=" + report.players()
                 + ", homes=" + report.homes() + ", conflicts=" + report.conflicts()
-                + ", unresolved=" + report.unresolvedWorlds() + ", imported=" + report.imported();
+                + ", unresolved=" + report.unresolvedWorlds() + ", imported=" + report.imported()
+                + ", fingerprint=" + report.fingerprint();
+    }
+
+    private static String format(SetHomeMigrationService.Report report) {
+        return "SetHome migration " + report.status() + ": source=" + (report.sourceFound() ? "FOUND" : "MISSING")
+                + ", fingerprint=" + report.fingerprint()
+                + ", players=" + report.players() + ", homes=" + report.homes()
+                + ", valid=" + report.validRecords() + ", invalid=" + report.invalidRecords()
+                + ", invalidCoordinates=" + report.invalidCoordinates() + ", malformed=" + report.malformedRecords()
+                + ", unavailableWorlds=" + report.unavailableWorlds() + ", conflicts=" + report.conflicts()
+                + ", alreadyImported=" + report.alreadyImported() + ", planned=" + report.plannedImports()
+                + ", imported=" + report.imported() + ", executionRejected=" + report.executionRejected()
+                + ", quarantined=" + report.quarantined();
     }
 
     private static String rootMessage(Throwable error) {
@@ -153,7 +219,11 @@ public final class HomeCommands implements CommandExecutor, TabCompleter {
     @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (command.getName().equalsIgnoreCase("homesadmin")) {
             if (args.length == 1) return List.of("reload", "diagnostics", "backup", "inspect", "migrate");
-            if (args.length == 2 && args[0].equalsIgnoreCase("migrate")) return List.of("scan", "plan", "execute", "status");
+            if (args.length == 2 && args[0].equalsIgnoreCase("migrate")) return List.of("essentials", "sethome", "scan", "plan", "execute", "status");
+            if (args.length == 3 && args[0].equalsIgnoreCase("migrate")) {
+                if (args[1].equalsIgnoreCase("sethome")) return List.of("scan", "plan", "execute", "verify", "status");
+                if (args[1].equalsIgnoreCase("essentials")) return List.of("scan", "plan", "execute", "status");
+            }
             return List.of();
         }
         if (!(sender instanceof Player player)) return List.of();

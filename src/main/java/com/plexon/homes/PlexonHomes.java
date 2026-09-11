@@ -11,6 +11,7 @@ import com.plexon.homes.integration.EconomyBridge;
 import com.plexon.homes.integration.HomesPlaceholderExpansion;
 import com.plexon.homes.listener.PlayerLifecycleListener;
 import com.plexon.homes.migration.EssentialsMigrationService;
+import com.plexon.homes.migration.SetHomeMigrationService;
 import com.plexon.homes.persistence.HomeRepository;
 import com.plexon.homes.service.DeleteConfirmationRegistry;
 import com.plexon.homes.service.HomeService;
@@ -32,7 +33,7 @@ public final class PlexonHomes extends JavaPlugin {
     public record ReloadResult(boolean success, String detail) {}
     private volatile Snapshot snapshot;
     private CoreIntegration core; private HomeRepository repository; private HomeService homes; private TeleportService teleports;
-    private EconomyBridge economy; private EssentialsMigrationService migration; private DeleteConfirmationRegistry confirmations;
+    private EconomyBridge economy; private EssentialsMigrationService essentialsMigration; private SetHomeMigrationService setHomeMigration; private DeleteConfirmationRegistry confirmations;
     private HomesPlaceholderExpansion placeholderExpansion;
 
     @Override public void onEnable() {
@@ -45,13 +46,15 @@ public final class PlexonHomes extends JavaPlugin {
             homes = new HomeService(this, repository, safe, this::configSnapshot);
             economy = new EconomyBridge(this);
             teleports = new TeleportService(this, homes, safe, economy, core.playerWatches(), this::configSnapshot);
-            migration = new EssentialsMigrationService(this, homes); confirmations = new DeleteConfirmationRegistry();
+            essentialsMigration = new EssentialsMigrationService(this, homes);
+            setHomeMigration = new SetHomeMigrationService(this, homes, this::configSnapshot);
+            confirmations = new DeleteConfirmationRegistry();
             DefaultPlexonHomesAPI api = new DefaultPlexonHomesAPI(homes, teleports);
             Bukkit.getServicesManager().register(PlexonHomesAPI.class, api, this, ServicePriority.Normal);
             HomesGui gui = new HomesGui(this, homes, teleports, confirmations, this::configSnapshot);
             Bukkit.getPluginManager().registerEvents(gui, this);
             Bukkit.getPluginManager().registerEvents(new PlayerLifecycleListener(homes, repository), this);
-            HomeCommands commands = new HomeCommands(this, homes, teleports, gui, migration);
+            HomeCommands commands = new HomeCommands(this, homes, teleports, gui, essentialsMigration, setHomeMigration);
             bind("sethome", commands); bind("home", commands); bind("homes", commands); bind("delhome", commands); bind("renamehome", commands); bind("homesadmin", commands);
             registerPlaceholderApi();
             repository.ready().whenComplete((ignored, error) -> runPrimary(() -> {
@@ -134,7 +137,7 @@ public final class PlexonHomes extends JavaPlugin {
                 + ", pendingTeleports=" + teleports.pendingCount() + ", teleportAsync=" + teleports.inFlightCount() + ", cooldowns=" + teleports.cooldownCount()
                 + ", watchedPlayers=" + watches.watchedPlayers() + ", watchRegistrations=" + watches.registrations()
                 + ", sqliteWrites=" + repository.writes() + ", sqliteFailures=" + repository.failures() + ", papi=" + (placeholderExpansion != null)
-                + ", migration=" + migration.status().status();
+                + ", migrationEssentials=" + essentialsMigration.status().status() + ", migrationSetHome=" + setHomeMigration.status().status();
     }
 
     private static String rootMessage(Throwable error) { Throwable cursor = error; while (cursor.getCause() != null) cursor = cursor.getCause(); return String.valueOf(cursor.getMessage()); }
