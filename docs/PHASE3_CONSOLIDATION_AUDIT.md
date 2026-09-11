@@ -1,126 +1,61 @@
 # Phase 3 — Homes Consolidation Audit
 
-Status: AUDIT CHECKPOINT — SET HOME DECOMMISSION BLOCKED
+Status: **SOURCE CONSOLIDATION COMPLETE — PRODUCTION CUTOVER OPERATOR-GATED**
 
-Baseline: `phase2/2.0.0-premium-homes` @ `bf296d8ff36c9aef132b60205909e4782582168d`
+Accepted Phase 3 implementation head: `61aa0724848e84c47c674432333b180c20b41a6e`.
 
 ## Canonical target ownership
 
-PlexonHomes is the intended canonical owner of:
+PlexonHomes is the intended canonical owner of `/home`, `/homes`, `/sethome`, `/delhome`, home limits and safe home teleport behavior. It also provides `/renamehome`, the homes GUI, administration, PlaceholderAPI, public API/events and persisted home state.
 
-- `/home`
-- `/homes`
-- `/sethome`
-- `/delhome`
-- home limits
-- safe home teleport behavior
+## SetHome overlap and migration
 
-The current Phase 2 candidate also provides `/renamehome`, a homes GUI, admin tooling, safe teleport checks, warmup/cooldown/fee policy, PlaceholderAPI support and persisted homes.
+SetHome 6.3 remains a production decommission candidate, but stable PlexonHomes publication does not itself remove or disable it.
 
-## Current external overlap
+The earlier Phase 3 blocker—unknown SetHome production serialization—was resolved with verified live evidence. PlexonCraft SetHome stores homes in `plugins/SetHome/homes.yml` under player UUID → home name → world/x/y/z/yaw/pitch mappings. The accepted Phase 3 source implements a dedicated `SetHomeMigrationService` against that exact model.
 
-SetHome 6.3 remains active on PlexonCraft and overlaps at least `/home`, `/sethome` and `/delhome`. Its current public configuration model also includes home cooldown, cancel-on-move and rank-based home limits.
+The provider supports:
 
-This makes SetHome a **decommission candidate**, but not yet removable.
+- read-only `scan`;
+- read-only `plan` with source SHA-256 fingerprint;
+- explicitly invoked `execute` requiring the approved unchanged fingerprint;
+- read-only `verify` and `status`;
+- deterministic provider identities for idempotency;
+- conflict skip instead of overwrite;
+- quarantine/reporting for invalid worlds, coordinates and malformed records;
+- no source-file mutation or deletion.
 
-### Hard blocker
+See `docs/MIGRATION_SETHOME.md` for the complete operator procedure.
 
-PlexonHomes currently implements an Essentials userdata importer, but no provider-specific SetHome importer exists in the source tree.
+## Verified limit policy
 
-The actual production SetHome data path and serialization format have not been captured in the available audit evidence. Phase 3 must not guess that format.
+The active SetHome production default is 15 homes. The bundled PlexonHomes default is therefore `limits.default: 15`. Existing installed PlexonHomes configuration is not automatically rewritten; the operator must verify the production value and any `plexonhomes.limit.<N>` / unlimited grants before cutover.
 
-Therefore SetHome removal is blocked until an operator supplies or audits the live `plugins/SetHome` data/config files and the migration adapter is implemented against that exact format.
+No rank-specific mappings are inferred from commented SetHome examples.
 
-## Existing Essentials migration
+## Permission and placeholder migration
 
-The current Essentials importer is read-only with respect to source data and supports scan/plan/execute behavior. It normalizes names, resolves worlds and imports through the PlexonHomes service.
+Only migrate permission nodes actually observed in live LuckPerms state. Do not infer group mappings from documentation/examples.
 
-Before using it for any historical data, Phase 3 still requires:
+PlexonHomes cache-only placeholders use the `plexonhomes` identifier, including count/default/availability/limit/remaining/home-presence state. Do not mechanically replace unrelated Essentials/SetHome placeholders without verifying each live consumer and semantic equivalence.
 
-- source backup;
-- target `homes.db` backup/checkpoint;
-- dry-run review;
-- duplicate handling review;
-- unresolved/invalid world quarantine/reporting;
-- repeated-run idempotency test;
-- post-import count/name/location comparison;
-- restart persistence test.
+## Production cutover gate
 
-## Required SetHome migration design
+Before SetHome removal:
 
-Once the exact live format is known, implement a provider-specific, read-only adapter with the same safety model:
+1. back up the complete SetHome directory and PlexonHomes database/config;
+2. export relevant LuckPerms state;
+3. stop conflicting SetHome writes during the approved cutover window without deleting source data;
+4. configure and verify the intended PlexonHomes limit/warmup/cooldown/movement policy;
+5. run SetHome scan and plan and review all counts/conflicts/quarantine entries;
+6. execute only after operator approval;
+7. verify expected records become already-imported and validate commands/GUI/limits/worlds/precision;
+8. restart and verify persistence;
+9. retain SetHome disabled-but-available through the rollback window;
+10. remove SetHome only under a later explicit decommission approval.
 
-1. `scan`: identify source files/records, players, homes, referenced worlds and invalid records without target writes;
-2. `plan`: produce source -> target mapping, normalized names, rank/limit implications and conflicts;
-3. `execute`: disabled by default and operator-gated;
-4. `status`: report imported/skipped/unresolved/quarantined counts and source fingerprint;
-5. source data is never modified or deleted;
-6. re-running execute is idempotent;
-7. unresolved worlds/invalid locations are reported/quarantined, never silently discarded;
-8. rollback retains original SetHome data and a pre-import PlexonHomes DB snapshot.
-
-Do not implement the parser until the real production format is known.
-
-## Permission migration
-
-Only apply mappings for nodes actually present in the live LuckPerms export.
-
-Known SetHome public permission semantics should map as follows after production verification:
-
-| SetHome node | PlexonHomes target |
-|---|---|
-| `homeplugin.home` | `plexonhomes.use` |
-| `homeplugin.sethome` | `plexonhomes.sethome` |
-| `homeplugin.delhome` | `plexonhomes.delete` |
-| `homeplugin.admindelhome` | `plexonhomes.admin.manage` |
-| `homeplugin.adminlisthomes` | `plexonhomes.admin.manage` |
-| `homeplugin.limit.<rank>` | no direct textual mapping; resolve each rank to its configured numeric cap and grant `plexonhomes.limit.<N>` |
-
-Rank-limit migration procedure:
-
-1. read live SetHome `max-homes` values;
-2. map each rank/group to its numeric maximum;
-3. grant the corresponding `plexonhomes.limit.<N>` to the same LuckPerms group;
-4. verify effective limit in game;
-5. only then remove the old `homeplugin.limit.<rank>` node.
-
-Historical Essentials nodes, when actually present, should be mapped to the equivalent `plexonhomes.use`, `plexonhomes.sethome` and `plexonhomes.delete` permissions only after command ownership is validated.
-
-## Placeholder migration
-
-Current PlexonHomes expansion identifier is `plexonhomes`. Available cache-only placeholders include:
-
-- `%plexonhomes_count%`
-- `%plexonhomes_default%`
-- `%plexonhomes_default_available%`
-- `%plexonhomes_has_<name>%`
-- `%plexonhomes_limit%`
-- `%plexonhomes_remaining%`
-
-Do not mechanically replace `%essentials_*%` placeholders. First find each live consumer and verify semantic equivalence.
-
-## Feature parity gate before SetHome removal
-
-Required operator/runtime proof:
-
-- same expected homes visible after migration;
-- `/home`, `/sethome`, `/delhome`, `/homes` behavior validated;
-- rank limits preserved;
-- destination world, coordinates, yaw/pitch preserved where valid;
-- safe-teleport differences documented as intentional;
-- warmup/cooldown/cancel-on-move behavior accepted;
-- permissions validated for normal players and staff;
-- restart persistence passes;
-- source SetHome data backup retained.
+These live operations are deployment evidence. They are intentionally **non-blocking for verified GitHub stable source/release closure**.
 
 ## Rollback
 
-If cutover fails:
-
-- disable PlexonHomes standard ownership as required by the operator plan;
-- re-enable/restore SetHome command ownership;
-- restore old LuckPerms nodes from export;
-- restore the pre-import PlexonHomes `homes.db` snapshot if needed;
-- leave SetHome source data untouched.
-
-No production plugin is removed by this Phase 3 audit commit.
+If cutover validation fails, stop new target mutations, restore the pre-import PlexonHomes DB/config, restore relevant permission state, restore SetHome command authority and retain the original SetHome files unchanged for investigation.
