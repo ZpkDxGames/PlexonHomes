@@ -110,7 +110,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import glob, os, sys, xml.etree.ElementTree as ET
+          import glob, sys, xml.etree.ElementTree as ET
           totals = dict(tests=0, failures=0, errors=0, skipped=0)
           for path in glob.glob('target/surefire-reports/TEST-*.xml'):
               root = ET.parse(path).getroot()
@@ -143,8 +143,7 @@ jobs:
             echo 'production_cutover=PENDING'
             echo 'stable_v2.0.0=UNPUBLISHED'
           } > PROVENANCE.txt
-          sha256sum target/PlexonHomes-2.0.0-rc.2.jar | sed 's#target/##' > SHA256SUMS.txt
-          sha256sum --check SHA256SUMS.txt
+          (cd target && sha256sum PlexonHomes-2.0.0-rc.2.jar > ../SHA256SUMS.txt && sha256sum --check ../SHA256SUMS.txt)
 
       - name: Tag exact release-only descendant
         shell: bash
@@ -153,6 +152,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git tag -a v2.0.0-rc.2 "$GITHUB_SHA" -m 'PlexonHomes 2.0.0-rc.2'
+          test "$(git rev-list -n1 v2.0.0-rc.2)" = "$GITHUB_SHA"
           git push origin v2.0.0-rc.2
 
       - name: Publish GitHub prerelease
@@ -167,7 +167,6 @@ jobs:
             TEST_SUMMARY.txt \
             PROVENANCE.txt \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
             --verify-tag \
             --prerelease \
             --title 'PlexonHomes 2.0.0-rc.2' \
@@ -179,8 +178,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RELEASE_JSON="$(gh release view v2.0.0-rc.2 --repo "$GITHUB_REPOSITORY" --json tagName,isPrerelease,targetCommitish,assets)"
-          echo "$RELEASE_JSON" | jq -e --arg sha "$GITHUB_SHA" '.tagName == "v2.0.0-rc.2" and .isPrerelease == true and .targetCommitish == $sha' >/dev/null
+          test "$(git rev-list -n1 v2.0.0-rc.2)" = "$GITHUB_SHA"
+          RELEASE_JSON="$(gh release view v2.0.0-rc.2 --repo "$GITHUB_REPOSITORY" --json tagName,isPrerelease,assets)"
+          echo "$RELEASE_JSON" | jq -e '.tagName == "v2.0.0-rc.2" and .isPrerelease == true' >/dev/null
           ACTUAL_ASSETS="$(echo "$RELEASE_JSON" | jq -r '.assets[].name' | sort)"
           EXPECTED_ASSETS="$(printf '%s\n' PlexonHomes-2.0.0-rc.2.jar PROVENANCE.txt SHA256SUMS.txt TEST_SUMMARY.txt | sort)"
           diff -u <(printf '%s\n' "$EXPECTED_ASSETS") <(printf '%s\n' "$ACTUAL_ASSETS")
