@@ -2,20 +2,30 @@ name: Build
 
 on:
   push:
-    branches: ['**']
+    branches: [main, 'closure/**', 'release/**', 'phase2/**', 'phase3/**']
+    tags-ignore: ['v*']
   pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  ACCEPTED_PHASE3_SHA: '61aa0724848e84c47c674432333b180c20b41a6e'
+  CORE_SHA256: '61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
+
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact source
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-java@v5
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '25'
@@ -25,55 +35,74 @@ jobs:
         run: |
           set -euo pipefail
           curl -L --fail --retry 3 -o /tmp/PlexonCore-2.0.4.jar https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar
-          echo '61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf  /tmp/PlexonCore-2.0.4.jar' | sha256sum -c -
-          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file -Dfile=/tmp/PlexonCore-2.0.4.jar -DgroupId=com.zpkdxgames -DartifactId=PlexonCore -Dversion=2.0.4 -Dpackaging=jar
+          echo "${CORE_SHA256}  /tmp/PlexonCore-2.0.4.jar" | sha256sum -c -
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
+            -Dfile=/tmp/PlexonCore-2.0.4.jar -DgroupId=com.zpkdxgames -DartifactId=PlexonCore \
+            -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
+      - name: Read version and prove accepted lineage
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(mvn -B -ntp help:evaluate -Dexpression=project.version -q -DforceStdout)"
+          test -n "$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          git merge-base --is-ancestor "$ACCEPTED_PHASE3_SHA" HEAD
+          grep -F '<paper.version>26.2.build.121-stable</paper.version>' pom.xml
+          grep -F '<core.version>2.0.4</core.version>' pom.xml
       - name: Test and package
         run: mvn -B -ntp clean verify
       - name: Verify installable JAR
-        run: ./scripts/verify-distribution.sh target/PlexonHomes-2.0.0-rc.2.jar
-      - name: Write test summary
+        run: ./scripts/verify-distribution.sh "target/PlexonHomes-${VERSION}.jar" "$VERSION"
+      - name: Generate exact test and provenance evidence
         shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
-          import glob, xml.etree.ElementTree as ET
+          import glob, pathlib, xml.etree.ElementTree as ET
           totals = dict(tests=0, failures=0, errors=0, skipped=0)
           for path in glob.glob('target/surefire-reports/TEST-*.xml'):
               root = ET.parse(path).getroot()
-              for key in totals: totals[key] += int(root.attrib.get(key, 0))
-          text = f"{totals['tests']} executed / {totals['failures']} failures / {totals['errors']} errors / {totals['skipped']} skipped\n"
-          open('TEST_SUMMARY.txt', 'w').write(text); print(text, end='')
-          if totals['tests'] == 0 or totals['failures'] or totals['errors'] or totals['skipped']:
-              raise SystemExit(1)
+              for key in totals:
+                  totals[key] += int(root.attrib.get(key, 0))
+          if not totals['tests'] or totals['failures'] or totals['errors'] or totals['skipped']:
+              raise SystemExit(str(totals))
+          pathlib.Path('TEST_SUMMARY.txt').write_text(
+              f"{totals['tests']} executed / {totals['failures']} failures / {totals['errors']} errors / {totals['skipped']} skipped\n"
+              "runtime_certification=NOT_EXECUTED\n", encoding='utf-8')
           PY
-      - name: Write provenance
-        shell: bash
-        run: |
-          {
-            echo 'repository=ZpkDxGames/PlexonHomes'
-            echo "source_sha=$GITHUB_SHA"
-            echo 'accepted_phase3_head=61aa0724848e84c47c674432333b180c20b41a6e'
-            echo 'version=2.0.0-rc.2'
-            echo 'java=25'
-            echo 'class_major=69'
-            echo 'paper_api=26.2.build.121-stable'
-            echo 'plexoncore=2.0.4'
-            echo 'plexoncore_sha256=61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
-            echo 'rollback_tag=v1.0.1'
-            echo 'rollback_sha=d20bef0a76cd3006df51d46d67a3e48636650d31'
-            echo 'runtime_certification=NOT_EXECUTED'
-            echo 'production_cutover=PENDING'
-          } > PROVENANCE.txt
-      - name: Checksum and whitespace
-        shell: bash
-        run: |
-          sha256sum target/PlexonHomes-2.0.0-rc.2.jar | sed 's#target/##' > SHA256SUMS.txt
-          git diff --check origin/main...HEAD
-      - uses: actions/upload-artifact@v4
+          jar="target/PlexonHomes-${VERSION}.jar"
+          (cd target && sha256sum "PlexonHomes-${VERSION}.jar") > SHA256SUMS.txt
+          (cd target && sha256sum --check ../SHA256SUMS.txt)
+          size="$(stat -c%s "$jar")"
+          digest="$(sha256sum "$jar" | awk '{print $1}')"
+          cat > PROVENANCE.txt <<EOF
+          repository=${GITHUB_REPOSITORY}
+          source_sha=${GITHUB_SHA}
+          version=${VERSION}
+          accepted_phase3_head=${ACCEPTED_PHASE3_SHA}
+          java=25
+          class_major=69
+          paper_api=26.2.build.121-stable
+          plexoncore=2.0.4
+          plexoncore_sha256=${CORE_SHA256}
+          rollback_tag=v1.0.1
+          rollback_sha=d20bef0a76cd3006df51d46d67a3e48636650d31
+          sethome_migration=OPERATOR_GATED
+          sethome_decommission=OPERATOR_GATED
+          jar_size=${size}
+          jar_sha256=${digest}
+          runtime_certification=NOT_EXECUTED
+          EOF
+      - name: Check whitespace
+        run: git diff --check origin/main...HEAD
+      - name: Upload verified artifact
+        uses: actions/upload-artifact@v7
         with:
-          name: PlexonHomes-2.0.0-rc.2-${{ github.sha }}
+          name: PlexonHomes-${{ github.sha }}
           path: |
-            target/PlexonHomes-2.0.0-rc.2.jar
+            target/PlexonHomes-*.jar
             SHA256SUMS.txt
             TEST_SUMMARY.txt
             PROVENANCE.txt
           if-no-files-found: error
+          retention-days: 30
