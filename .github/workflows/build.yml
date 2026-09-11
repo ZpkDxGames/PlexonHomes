@@ -30,7 +30,7 @@ jobs:
       - name: Test and package
         run: mvn -B -ntp clean verify
       - name: Verify installable JAR
-        run: ./scripts/verify-distribution.sh target/PlexonHomes-2.0.0-rc.1.jar
+        run: ./scripts/verify-distribution.sh target/PlexonHomes-2.0.0-rc.2.jar
       - name: Write test summary
         shell: bash
         run: |
@@ -42,6 +42,8 @@ jobs:
               for key in totals: totals[key] += int(root.attrib.get(key, 0))
           text = f"{totals['tests']} executed / {totals['failures']} failures / {totals['errors']} errors / {totals['skipped']} skipped\n"
           open('TEST_SUMMARY.txt', 'w').write(text); print(text, end='')
+          if totals['tests'] == 0 or totals['failures'] or totals['errors'] or totals['skipped']:
+              raise SystemExit(1)
           PY
       - name: Write provenance
         shell: bash
@@ -49,25 +51,28 @@ jobs:
           {
             echo 'repository=ZpkDxGames/PlexonHomes'
             echo "source_sha=$GITHUB_SHA"
-            echo 'version=2.0.0-rc.1'
+            echo 'accepted_phase3_head=61aa0724848e84c47c674432333b180c20b41a6e'
+            echo 'version=2.0.0-rc.2'
             echo 'java=25'
             echo 'class_major=69'
+            echo 'paper_api=26.2.build.121-stable'
             echo 'plexoncore=2.0.4'
             echo 'plexoncore_sha256=61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
             echo 'rollback_tag=v1.0.1'
             echo 'rollback_sha=d20bef0a76cd3006df51d46d67a3e48636650d31'
             echo 'runtime_certification=NOT_EXECUTED'
+            echo 'production_cutover=PENDING'
           } > PROVENANCE.txt
       - name: Checksum and whitespace
         shell: bash
         run: |
-          sha256sum target/PlexonHomes-2.0.0-rc.1.jar | sed 's#target/##' > SHA256SUMS.txt
+          sha256sum target/PlexonHomes-2.0.0-rc.2.jar | sed 's#target/##' > SHA256SUMS.txt
           git diff --check origin/main...HEAD
       - uses: actions/upload-artifact@v4
         with:
-          name: PlexonHomes-2.0.0-rc.1-${{ github.sha }}
+          name: PlexonHomes-2.0.0-rc.2-${{ github.sha }}
           path: |
-            target/PlexonHomes-2.0.0-rc.1.jar
+            target/PlexonHomes-2.0.0-rc.2.jar
             SHA256SUMS.txt
             TEST_SUMMARY.txt
             PROVENANCE.txt

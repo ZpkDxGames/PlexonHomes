@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.plexon</groupId>
   <artifactId>PlexonHomes</artifactId>
-  <version>2.0.0-rc.1</version>
+  <version>2.0.0-rc.2</version>
   <name>PlexonHomes</name>
   <description>Core-native homes and safe teleport module for PlexonCraft.</description>
   <properties>
